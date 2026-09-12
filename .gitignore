@@ -1,0 +1,5 @@
+node_modules/
+.install-manifest.json
+.install-backups/
+.agent-skill-manager.json
+.agent-skills-backups/

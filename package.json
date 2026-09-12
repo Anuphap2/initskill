@@ -1,0 +1,37 @@
+{
+  "name": "local-agent-skill-manager",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive local Markdown rule compiler for AI coding assistants",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "initskill": "./cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "file-safety.mjs",
+    "skills/",
+    "README.md",
+    "CHANGELOG.md",
+    "install.mjs",
+    "uninstall.mjs",
+    "install.ps1",
+    "uninstall.ps1",
+    "install.sh",
+    "uninstall.sh",
+    "npm-shrinkwrap.json",
+    "initskill",
+    "initskill.cmd"
+  ],
+  "scripts": {
+    "check": "node --check cli.mjs && node --check file-safety.mjs && node --check install.mjs && node --check uninstall.mjs",
+    "test": "node --test",
+    "verify": "npm run check && npm test && npm pack --dry-run"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.5.0"
+  }
+}
