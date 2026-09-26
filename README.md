@@ -17,6 +17,8 @@ initskill
 
 เลือก `เริ่มงานทั่วไป` เพื่อสร้าง Engineering Team Agent หรือเลือก `สร้าง Skill ทั่วไป` หากต้องการ Skills แยกเป็นรายการ
 
+ถ้าเรียกจาก Codex, CI หรือโปรเซสที่ไม่มี interactive terminal คำสั่งเปล่าจะเลือก Agent ชุดทั่วไปให้อัตโนมัติและไม่เขียนทับไฟล์ที่มีอยู่ หากต้องการระบุชัดเจน ใช้ `initskill init --mode agent --profile general --non-interactive` หรือ `initskill init --mode skill --profile general --non-interactive`
+
 ก่อนเขียน CLI จะแสดงไฟล์ที่จะสร้าง/อัปเดตพร้อม diff หากพบไฟล์ที่ยังไม่รู้จักหรือมีการแก้ไขเอง จะให้เลือกอัปเดตโดยสำรองไฟล์เดิม เก็บไฟล์เดิม หรือยกเลิกทั้งหมด ไฟล์สำรองอยู่ใน `.agent-skills-backups/` และ metadata สำหรับติดตามไฟล์ที่ CLI สร้างอยู่ใน `.agent-skill-manager.json`
 
 ## คำสั่ง

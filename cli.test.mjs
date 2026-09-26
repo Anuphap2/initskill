@@ -216,6 +216,14 @@ test('CLI help, version, and non-interactive initialization have deterministic b
   assert.equal(JSON.parse(doctor.stdout).ok, true);
 });
 
+test('plain init works without a TTY by selecting the recommended Agent profile', (t) => {
+  const root = tempRoot(t);
+  const init = spawnSync(process.execPath, [CLI, '--output-dir', root], { encoding: 'utf8' });
+  assert.equal(init.status, 0, init.stderr || init.stdout);
+  assert.match(init.stdout, /ไม่พบ interactive terminal/);
+  assert.ok(existsSync(join(root, '.agents', 'agents', 'engineering-team', 'agent.md')));
+});
+
 test('doctor rejects malformed Skill metadata', (t) => {
   const root = tempRoot(t);
   writeCompiledRules(rulesWith(), root, 'skill');

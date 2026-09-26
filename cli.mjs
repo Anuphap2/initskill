@@ -730,12 +730,16 @@ export async function runInteractive({
 
   let mode;
   let selected;
-  if (nonInteractive) {
-    if (!requestedMode) throw new Error('--non-interactive ต้องระบุ --mode agent หรือ --mode skill');
-    mode = requestedMode;
+  const interactiveTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  if (nonInteractive || !interactiveTerminal) {
+    mode = requestedMode ?? 'agent';
     const profile = requestedProfile ?? 'general';
     if (profile === 'custom') throw new Error('โหมด --non-interactive ยังไม่รองรับ --profile custom ให้ใช้ profile ที่กำหนดไว้');
     selected = getProfileRules(rules, profile);
+    if (!nonInteractive) {
+      console.log('ไม่พบ interactive terminal: ใช้ Agent ชุดทั่วไปอัตโนมัติ (ระบุ --mode skill หากต้องการสร้าง Skill)');
+      nonInteractive = true;
+    }
   } else {
     const startMode = requestedMode ? 'custom' : await select({
       message: 'เริ่มต้นใช้งานแบบไหน',

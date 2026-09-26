@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2 — 2026-09-26
+
+- Made plain `initskill` usable from Codex and CI processes without an interactive TTY by selecting the recommended Agent profile safely.
+
 ## 1.1.1 — 2026-09-26
 
 - Fixed Antigravity workspace rules by generating valid YAML frontmatter and validating `trigger` values in `doctor`.
