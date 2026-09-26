@@ -63,7 +63,9 @@ initskill init --mode agent --profile general --non-interactive --on-conflict er
 
 ## โครงสร้างที่สร้าง
 
-โหมด Agent สร้าง `.agents/agents/engineering-team/agent.md`, workspace rule, project context, architecture/debt templates และ portable `AGENTS.md` ส่วนโหมด Skill สร้างแต่ละ `SKILL.md` พร้อมไฟล์ project พื้นฐาน
+โหมด Agent สร้าง `.agents/agents/engineering-team/agent.md`, workspace rule ที่มี YAML frontmatter ตามรูปแบบ Antigravity, project context, architecture/debt templates และ portable `AGENTS.md` ส่วนโหมด Skill สร้างแต่ละ `SKILL.md` พร้อมไฟล์ project พื้นฐาน
+
+ถ้า Antigravity ไม่เห็น Agent ให้ปิดแล้วเปิด workspace/session ใหม่ จากนั้นพิมพ์ `/agents` อีกครั้ง ไฟล์ Agent ต้องอยู่ที่ `.agents/agents/<name>/agent.md` และไฟล์ใน `.agents/rules/` ต้องมี `trigger` ที่ถูกต้อง มิฉะนั้น Antigravity จะไม่โหลด rule แบบเงียบ ๆ
 
 เพิ่ม rule ได้โดยวาง Markdown ไว้ใต้ `skills/<category>/` ในคลังของ CLI แล้วเรียก `initskill` อีกครั้ง ไม่ต้องแก้ source code ของ CLI
 

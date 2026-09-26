@@ -78,8 +78,27 @@ test('agent generation creates standard folders and a default Git policy', (t) =
   const outputs = writeCompiledRules(rulesWith(), root, 'agent');
   assert.ok(outputs.some((path) => path.endsWith(join('.agents', 'agents', 'engineering-team', 'agent.md'))));
   assert.match(readFileSync(join(root, '.agents', 'agents', 'engineering-team', 'agent.md'), 'utf8'), /name: engineering-team/);
+  const workspaceRule = readFileSync(join(root, '.agents', 'rules', '00-engineering-team.md'), 'utf8');
+  assert.match(workspaceRule, /^---\r?\ntrigger: model_decision/m);
+  assert.ok(Buffer.byteLength(workspaceRule) < 24000);
   assert.equal(JSON.parse(readFileSync(join(root, '.agents', 'project', 'agent-manager-config.json'), 'utf8')).git.commitPolicy, 'ask');
   assert.equal(diagnoseProject(root, 'agent').every((check) => check.ok), true);
+});
+
+test('general agent workspace rule stays within Antigravity rule size limits', (t) => {
+  const root = tempRoot(t);
+  const rules = getProfileRules(discoverRules(), 'general');
+  writeCompiledRules(rules, root, 'agent');
+  const rulePath = join(root, '.agents', 'rules', '00-engineering-team.md');
+  assert.ok(Buffer.byteLength(readFileSync(rulePath, 'utf8')) < 24000);
+});
+
+test('doctor rejects workspace rules without valid Antigravity frontmatter', (t) => {
+  const root = tempRoot(t);
+  writeCompiledRules(rulesWith(), root, 'agent');
+  const rulePath = join(root, '.agents', 'rules', '00-engineering-team.md');
+  writeFileSync(rulePath, '# Invalid rule\n\nThis is ignored by Antigravity.\n');
+  assert.equal(diagnoseProject(root, 'agent').find((check) => check.path.endsWith('00-engineering-team.md')).ok, false);
 });
 
 test('compileAgent follows explicit policy configuration instead of forcing commits', () => {

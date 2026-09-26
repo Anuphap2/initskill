@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.1 — 2026-09-26
+
+- Fixed Antigravity workspace rules by generating valid YAML frontmatter and validating `trigger` values in `doctor`.
+- Kept generated workspace rules below Antigravity's per-file limit for the standard general profile.
+
 ## 1.1.0 — 2026-09-12
 
 - Added conflict previews, safe update tracking, explicit keep/overwrite choices, durable backups, and atomic writes.
