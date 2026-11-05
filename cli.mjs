@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkbox, confirm, select } from '@inquirer/prompts';
@@ -1282,7 +1282,19 @@ async function main(args) {
   });
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+function isEntryPoint(argvPath, metaUrl) {
+  if (!argvPath) return false;
+  const resolvedArgv = resolve(argvPath);
+  const target = resolve(fileURLToPath(metaUrl));
+  if (resolvedArgv === target) return true;
+  try {
+    return realpathSync(resolvedArgv) === realpathSync(target);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
     if (error.name === 'ExitPromptError' || error.name === 'UserCancelledError') {
       console.log('\nยกเลิกการทำงาน');

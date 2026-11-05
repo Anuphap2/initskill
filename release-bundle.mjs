@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync,
-  readFileSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+  readFileSync, readdirSync, realpathSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -201,7 +201,19 @@ function main(args) {
   console.log(JSON.stringify(buildReleaseBundle(output, { dryRun }), null, 2));
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isEntryPoint(argvPath, metaUrl) {
+  if (!argvPath) return false;
+  const resolvedArgv = resolve(argvPath);
+  const target = fileURLToPath(metaUrl);
+  if (resolvedArgv === target) return true;
+  try {
+    return realpathSync(resolvedArgv) === realpathSync(target);
+  } catch {
+    return false;
+  }
+}
+
+if (isEntryPoint(process.argv[1], import.meta.url)) {
   try { main(process.argv.slice(2)); }
   catch (error) { console.error(`Release bundle failed: ${error.message}`); process.exitCode = 1; }
 }
