@@ -21,7 +21,9 @@ import {
   diagnoseProject,
   discoverRules,
   getProfileRules,
+  getCatalogue,
   planCompiledRules,
+  resolveTarget,
   writeCompiledRules,
 } from './cli.mjs';
 import { applyWritePlan, formatLineDiff } from './file-safety.mjs';
@@ -101,6 +103,77 @@ test('doctor rejects workspace rules without valid Antigravity frontmatter', (t)
   assert.equal(diagnoseProject(root, 'agent').find((check) => check.path.endsWith('00-engineering-team.md')).ok, false);
 });
 
+test('agent targets register native roles with an independent restricted reviewer', (t) => {
+  const root = tempRoot(t);
+  const rules = getProfileRules(discoverRules(), 'general');
+  writeCompiledRules(rules, root, 'agent', { target: 'both' });
+  const codex = readFileSync(join(root, '.codex', 'agents', 'skill-manager-reviewer.toml'), 'utf8');
+  const scalars = Object.fromEntries(codex.trim().split('\n').map((line) => {
+    const [key, value] = line.split(/ = (.*)/s);
+    return [key, JSON.parse(value)];
+  }));
+  assert.equal(scalars.name, 'skill-manager-reviewer');
+  assert.equal(scalars.sandbox_mode, 'read-only');
+  assert.ok(scalars.developer_instructions.length > 50);
+  assert.equal(Object.hasOwn(scalars, 'model'), false); // Inherit the user's configured model.
+  const anti = readFileSync(join(root, '.agents', 'agents', 'reviewer', 'agent.md'), 'utf8');
+  assert.match(anti, /^subagent: true$/m);
+  assert.match(anti, /^mainAgent: false$/m);
+  assert.doesNotMatch(anti, /^  - (run_command|replace_file_content)$/m);
+  assert.equal(diagnoseProject(root).every((check) => check.ok), true);
+  writeFileSync(join(root, '.codex', 'agents', 'skill-manager-reviewer.toml'), codex.replace('read-only', 'workspace-write'));
+  assert.equal(diagnoseProject(root).find((check) => check.path.endsWith('skill-manager-reviewer.toml')).ok, false);
+});
+
+test('doctor catches missing registered roles and refuses undispatchable Antigravity role metadata', (t) => {
+  const root = tempRoot(t);
+  writeCompiledRules(getProfileRules(discoverRules(), 'general'), root, 'agent', { target: 'both' });
+  rmSync(join(root, '.codex', 'agents', 'skill-manager-developer.toml'));
+  const antiPath = join(root, '.agents', 'agents', 'tester', 'agent.md');
+  writeFileSync(antiPath, readFileSync(antiPath, 'utf8').replace('subagent: true', 'subagent: false'));
+  const checks = diagnoseProject(root);
+  assert.equal(checks.find((check) => check.path.replaceAll('\\', '/') === '.codex/agents/skill-manager-developer.toml').ok, false);
+  assert.equal(checks.find((check) => check.path.replaceAll('\\', '/') === '.agents/agents/tester/agent.md').ok, false);
+});
+
+test('specialized profiles do not register unrelated CI/CD or Git workers', (t) => {
+  const root = tempRoot(t);
+  writeCompiledRules(getProfileRules(discoverRules(), 'tester'), root, 'agent', { target: 'both' });
+  assert.equal(existsSync(join(root, '.codex', 'agents', 'skill-manager-reviewer.toml')), true);
+  assert.equal(existsSync(join(root, '.agents', 'agents', 'tester', 'agent.md')), true);
+  assert.equal(existsSync(join(root, '.agents', 'agents', 'ci-cd', 'agent.md')), false);
+  assert.equal(existsSync(join(root, '.codex', 'agents', 'skill-manager-git-release.toml')), false);
+});
+
+test('AI skill lifecycle CLI creates, inspects, safely adapts, and validates project-local skills', (t) => {
+  const root = tempRoot(t);
+  const run = (...args) => spawnSync(process.execPath, [CLI, 'skill', ...args, '--output-dir', root, '--json'], { encoding: 'utf8' });
+  const created = run('create', 'api-contract', '--description', 'Verify the documented API response contract.');
+  assert.equal(created.status, 0, created.stderr || created.stdout);
+  const original = JSON.parse(created.stdout);
+  assert.equal(original.ok, true);
+  assert.equal(original.draft, true);
+  const inspected = JSON.parse(run('inspect', 'api-contract').stdout);
+  assert.equal(inspected.hash, original.hash);
+  const draft = join(root, 'draft.md');
+  writeFileSync(draft, '---\nname: api-contract\ndescription: "Verify API responses against the repository contract."\n---\n\nInspect the documented response schema and run the existing contract tests.\n');
+  const preview = run('update', 'api-contract', '--from-file', draft, '--expected-hash', inspected.hash, '--dry-run');
+  assert.equal(preview.status, 0, preview.stdout);
+  assert.equal(JSON.parse(run('inspect', 'api-contract').stdout).hash, original.hash);
+  const adapted = run('update', 'api-contract', '--from-file', draft, '--expected-hash', inspected.hash);
+  assert.equal(adapted.status, 0, adapted.stdout);
+  const result = JSON.parse(adapted.stdout);
+  assert.equal(existsSync(result.backup), true);
+  assert.notEqual(result.hash, original.hash);
+  const stale = run('update', 'api-contract', '--from-file', draft, '--expected-hash', inspected.hash);
+  assert.notEqual(stale.status, 0);
+  assert.equal(JSON.parse(stale.stdout).ok, false);
+  const overwrite = run('create', 'api-contract', '--from-file', draft);
+  assert.notEqual(overwrite.status, 0);
+  assert.equal(JSON.parse(run('validate').stdout).ok, true);
+  assert.equal(JSON.parse(run('list').stdout).skills.length, 1);
+});
+
 test('compileAgent follows explicit policy configuration instead of forcing commits', () => {
   const output = compileAgent(rulesWith());
   assert.match(output, /นโยบาย commit ใน/);
@@ -152,7 +225,7 @@ test('AGENTS.md managed block changes mode while user-authored text remains inta
   applyWritePlan(second);
   const content = readFileSync(join(root, 'AGENTS.md'), 'utf8');
   assert.match(content, /Keep this text/);
-  assert.match(content, /Antigravity skills/);
+  assert.match(content, /Shared skills/);
   assert.match(content, /Keep this text\.\r?\n\r?\n<!-- BEGIN LOCAL AGENT SKILL MANAGER -->/);
   assert.equal((content.match(/BEGIN LOCAL AGENT SKILL MANAGER/g) ?? []).length, 1);
 });
@@ -221,7 +294,89 @@ test('plain init works without a TTY by selecting the recommended Agent profile'
   const init = spawnSync(process.execPath, [CLI, '--output-dir', root], { encoding: 'utf8' });
   assert.equal(init.status, 0, init.stderr || init.stdout);
   assert.match(init.stdout, /ไม่พบ interactive terminal/);
-  assert.ok(existsSync(join(root, '.agents', 'agents', 'engineering-team', 'agent.md')));
+  assert.ok(existsSync(join(root, '.agents', 'skills', 'developer-implementation', 'SKILL.md')));
+  assert.equal(diagnoseProject(root).every((check) => check.ok), true);
+});
+
+for (const target of ['codex', 'antigravity', 'both']) {
+  for (const mode of ['agent', 'skill']) {
+    test(`${target}/${mode} emits discoverable skills and passes target-aware doctor without a TTY`, (t) => {
+      const root = tempRoot(t);
+      const args = [CLI, 'init', '--target', target, '--mode', mode, '--json', '--output-dir', root];
+      const init = spawnSync(process.execPath, args, { encoding: 'utf8' });
+      assert.equal(init.status, 0, init.stderr || init.stdout);
+      const summary = JSON.parse(init.stdout);
+      assert.equal(summary.target, target);
+      assert.equal(summary.mode, mode);
+      assert.ok(summary.written.includes('AGENTS.md'));
+      const nativeAntigravityAgent = join(root, '.agents', 'agents', 'engineering-team', 'agent.md');
+      assert.equal(existsSync(nativeAntigravityAgent), mode === 'agent' && target !== 'codex');
+      const catalogue = getCatalogue();
+      for (const id of catalogue.profiles.find((profile) => profile.id === 'general').ruleIds) {
+        const skill = catalogue.skills.find((entry) => entry.id === id);
+        assert.ok(existsSync(join(root, '.agents', 'skills', skill.name, 'SKILL.md')));
+      }
+      const doctor = spawnSync(process.execPath, [CLI, 'doctor', '--target', target, '--json', '--output-dir', root], { encoding: 'utf8' });
+      assert.equal(doctor.status, 0, doctor.stdout || doctor.stderr);
+      assert.equal(JSON.parse(doctor.stdout).ok, true);
+      // A repeat must not write any output again.
+      const repeat = spawnSync(process.execPath, args, { encoding: 'utf8' });
+      assert.equal(repeat.status, 0, repeat.stdout || repeat.stderr);
+      assert.deepEqual(JSON.parse(repeat.stdout).written, []);
+    });
+  }
+}
+
+test('auto respects explicit targets and saved preferences before host detection', (t) => {
+  const root = tempRoot(t);
+  assert.equal(resolveTarget(root, 'auto', {}), 'both');
+  assert.equal(resolveTarget(root, 'auto', { CODEX_THREAD_ID: 'test' }), 'codex');
+  assert.equal(resolveTarget(root, 'auto', { TERM_PROGRAM: 'Antigravity' }), 'antigravity');
+  writeCompiledRules(rulesWith(), root, 'agent', { target: 'both' });
+  assert.equal(resolveTarget(root, 'auto', { CODEX_THREAD_ID: 'test' }), 'both');
+  assert.equal(resolveTarget(root, 'codex', {}), 'codex');
+  assert.throws(() => resolveTarget(root, 'other', {}), /--target/);
+});
+
+test('AI can discover and choose specific rules using JSON without a menu', (t) => {
+  const root = tempRoot(t);
+  const listing = spawnSync(process.execPath, [CLI, 'list', '--json'], { encoding: 'utf8' });
+  assert.equal(listing.status, 0);
+  const catalogue = JSON.parse(listing.stdout);
+  const qa = catalogue.skills.find((skill) => skill.name === 'tester-qa-strategy');
+  assert.ok(qa);
+  const args = [CLI, 'init', '--target', 'codex', '--mode', 'skill', '--rules', qa.name, '--json', '--output-dir', root];
+  const preview = spawnSync(process.execPath, [...args, '--dry-run'], { encoding: 'utf8' });
+  assert.equal(preview.status, 0, preview.stdout || preview.stderr);
+  assert.equal(JSON.parse(preview.stdout).dryRun, true);
+  assert.equal(existsSync(join(root, '.agents')), false);
+  const init = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  assert.equal(init.status, 0, init.stdout || init.stderr);
+  assert.deepEqual(readdirSync(join(root, '.agents', 'skills')), [qa.name]);
+  const invalid = spawnSync(process.execPath, [CLI, 'init', '--rules', 'missing', '--json', '--output-dir', root], { encoding: 'utf8' });
+  assert.notEqual(invalid.status, 0);
+  assert.equal(JSON.parse(invalid.stdout).ok, false);
+});
+
+test('doctor detects a deleted selected skill even if other skills remain', (t) => {
+  const root = tempRoot(t);
+  writeCompiledRules(getProfileRules(discoverRules()), root, 'agent', { target: 'both' });
+  rmSync(join(root, '.agents', 'skills', 'tester-qa-strategy', 'SKILL.md'));
+  const missing = diagnoseProject(root).find((check) => check.path.replaceAll('\\', '/') === '.agents/skills/tester-qa-strategy/SKILL.md');
+  assert.equal(missing.ok, false);
+});
+
+test('changing AI targets preserves user instructions and refuses modified skill conflicts', (t) => {
+  const root = tempRoot(t);
+  writeCompiledRules(rulesWith(), root, 'agent', { target: 'antigravity' });
+  const guide = join(root, 'AGENTS.md');
+  writeFileSync(guide, `# User agreement\nKeep my data.\n\n${readFileSync(guide, 'utf8')}`);
+  writeCompiledRules(rulesWith(), root, 'agent', { target: 'codex' });
+  assert.match(readFileSync(guide, 'utf8'), /Keep my data/);
+  const skill = join(root, '.agents', 'skills', 'core-rule', 'SKILL.md');
+  writeFileSync(skill, `${readFileSync(skill, 'utf8')}\nUser addition.\n`);
+  assert.throws(() => writeCompiledRules(rulesWith('# Rule\nUpdated.'), root, 'agent', { target: 'both' }), /ไฟล์มีอยู่แล้ว/);
+  assert.match(readFileSync(skill, 'utf8'), /User addition/);
 });
 
 test('doctor rejects malformed Skill metadata', (t) => {

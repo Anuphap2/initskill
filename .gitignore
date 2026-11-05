@@ -3,3 +3,5 @@ node_modules/
 .install-backups/
 .agent-skill-manager.json
 .agent-skills-backups/
+dist/
+.release-bundle-*/

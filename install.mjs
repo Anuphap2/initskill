@@ -10,7 +10,7 @@ import { sha256, writeFileSafely } from './file-safety.mjs';
 const SOURCE = dirname(fileURLToPath(import.meta.url));
 const INSTALL_MANIFEST = '.install-manifest.json';
 const RUNTIME_FILES = [
-  'cli.mjs', 'file-safety.mjs', 'package.json', 'README.md', 'CHANGELOG.md',
+  'cli.mjs', 'file-safety.mjs', 'skills-manager.mjs', 'release-bundle.mjs', 'package.json', 'README.md', 'CHANGELOG.md', 'DISTRIBUTION.md',
   'install.mjs', 'uninstall.mjs', 'install.ps1', 'uninstall.ps1', 'install.sh', 'uninstall.sh',
   'initskill.cmd', 'initskill',
 ];

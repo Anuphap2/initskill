@@ -4,6 +4,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkbox, confirm, select } from '@inquirer/prompts';
+import { createProjectSkill, validateProjectSkills } from './skills-manager.mjs';
 import {
   applyWritePlan,
   backupExistingFile,
@@ -22,12 +23,65 @@ const MANAGED_START = '<!-- BEGIN LOCAL AGENT SKILL MANAGER -->';
 const MANAGED_END = '<!-- END LOCAL AGENT SKILL MANAGER -->';
 const MANAGED_MARKERS = { start: MANAGED_START, end: MANAGED_END };
 const PROJECT_CONFIG = join('.agents', 'project', 'agent-manager-config.json');
+const TARGETS = ['codex', 'antigravity', 'both'];
+
+function validateTarget(target) {
+  if (!['auto', ...TARGETS].includes(target)) throw new Error('--target ต้องเป็น auto, codex, antigravity หรือ both');
+}
+
+export function resolveTarget(projectDir, requested = 'auto', env = process.env) {
+  validateTarget(requested);
+  if (requested !== 'auto') return requested;
+  const configPath = join(projectDir, PROJECT_CONFIG);
+  if (existsSync(configPath)) {
+    const config = parseProjectConfig(readFileSync(configPath, 'utf8'));
+    if (config.target !== undefined) {
+      if (!TARGETS.includes(config.target)) throw new Error(`${PROJECT_CONFIG}: target ไม่ถูกต้อง`);
+      return config.target;
+    }
+  }
+  if (env.CODEX_THREAD_ID) return 'codex';
+  if (/antigravity/i.test(env.TERM_PROGRAM ?? '')) return 'antigravity';
+  const codex = existsSync(join(projectDir, '.codex'));
+  const antigravity = existsSync(join(projectDir, '.agents', 'agents')) || existsSync(join(projectDir, '.agents', 'rules'));
+  if (codex && !antigravity) return 'codex';
+  if (antigravity && !codex) return 'antigravity';
+  return 'both';
+}
+
+const SKILL_DESCRIPTIONS = {
+  'core/no-assumptions.md': 'Resolve missing facts, ambiguous requirements, or uncertain repository contracts before implementation.',
+  'core/language-strategy.md': 'Write clear agent instructions and choose the response language for Thai and English technical communication.',
+  'core/skill-authoring.md': 'Create or revise skill contracts, trigger descriptions, procedures, and verification criteria.',
+  'team/subagent-orchestration.md': 'Delegate independent engineering tasks to native subagents and collect separate review evidence without conflicting edits.',
+  'team/engineering-team.md': 'Coordinate development, QA, CI/CD, and Git handoffs for work spanning multiple engineering responsibilities.',
+  'developer/implementation.md': 'Implement features or repair code defects while preserving interfaces and controlling technical debt.',
+  'tester/qa-strategy.md': 'Design tests, investigate regressions, or verify acceptance criteria and edge cases.',
+  'cicd/pipeline-engineering.md': 'Create or repair build, CI, deployment, and rollback pipelines.',
+  'git/repository-workflow.md': 'Review repository changes, stage task files, or create local commits and releases under the project Git policy.',
+  'loop-test/tdd-cycle.md': 'Use test-driven development when implementing behavior with a runnable test framework.',
+  'loop-test/self-healing-test.md': 'Repair test code in a test-only task; do not use to hide a production defect by weakening assertions.',
+  'backend/mongodb-schema.md': 'Design or review MongoDB schemas, indexes, and query access patterns in projects using MongoDB.',
+  'backend/nestjs-conventions.md': 'Implement or review NestJS modules, controllers, providers, and dependency injection.',
+  'frontend/nextjs-app-router.md': 'Implement or review Next.js App Router components, routing, and server/client boundaries.',
+  'frontend/tailwind.md': 'Implement or review Tailwind styling, responsive layouts, and accessible UI states.',
+};
+
+function skillDescription(rule) {
+  return SKILL_DESCRIPTIONS[ruleKey(rule)] ?? `Apply ${rule.title} when explicitly requested or when the task concerns ${rule.title.toLowerCase()}.`;
+}
+
+function compileSkillCatalogue(rules) {
+  return rules.map((rule) => `- [${skillSlug(rule)}](.agents/skills/${skillSlug(rule)}/SKILL.md): ${skillDescription(rule)}`).join('\n');
+}
 
 const PROFILES = {
   general: [
     'core/no-assumptions.md',
     'core/language-strategy.md',
+    'core/skill-authoring.md',
     'team/engineering-team.md',
+    'team/subagent-orchestration.md',
     'developer/implementation.md',
     'tester/qa-strategy.md',
     'cicd/pipeline-engineering.md',
@@ -40,6 +94,12 @@ const PROFILES = {
 };
 
 const ROLE_PROFILES = {
+  reviewer: {
+    description: 'Independently review correctness, security, regressions, and missing tests without editing the implementation.',
+    rules: ['core/no-assumptions.md', 'tester/qa-strategy.md'],
+    readOnly: true,
+    always: true,
+  },
   developer: {
     description: 'Implements maintainable changes, evaluates design trade-offs, and keeps scope under control.',
     rules: ['core/no-assumptions.md', 'developer/implementation.md', 'loop-test/tdd-cycle.md'],
@@ -56,7 +116,81 @@ const ROLE_PROFILES = {
     description: 'Maintains reviewable Git history, safe releases, and reversible changes.',
     rules: ['core/no-assumptions.md', 'git/repository-workflow.md'],
   },
+  'skill-author': {
+    description: 'Create or adapt project-local skills for a demonstrated task, validate metadata, and preserve existing instructions.',
+    rules: ['core/no-assumptions.md', 'core/skill-authoring.md'],
+  },
 };
+
+function selectedRoles(rules) {
+  const selected = new Set(rules.map(ruleKey));
+  return Object.entries(ROLE_PROFILES).filter(([, profile]) => profile.always
+    || profile.rules.some((key) => !key.startsWith('core/no-assumptions') && selected.has(key)));
+}
+
+function roleInstructions(role, profile, rules) {
+  const relevant = getRulesByKeys(rules, profile.rules);
+  return [
+    `Responsibility: ${profile.description}`,
+    'Read the workspace root AGENTS.md, .agents/project/agent-manager-config.json, and .agents/project/subagent-contract.md.',
+    'Stay within the parent task, assigned paths, and acceptance criteria. Parent authorization and sandbox restrictions still apply.',
+    profile.readOnly ? 'Do not modify files, stage changes, commit, or run commands with side effects. Return evidence-backed findings only.'
+      : 'Edit only paths assigned by the parent. Do not overlap another worker, stage, commit, publish, or deploy without separate authorization.',
+    role === 'tester' ? 'Run relevant tests and classify failures. Do not weaken assertions or edit production code to make tests pass.' : '',
+    role === 'skill-author' ? 'Write only the authorized project-local skill. Validate its contract and demonstrate behavior before adoption; do not edit global skills or safety policy.' : '',
+    'Do not spawn nested subagents unless the parent explicitly delegates that responsibility and supplies a budget.',
+    'Load only relevant installed skills:',
+    ...relevant.map((rule) => `- .agents/skills/${skillSlug(rule)}/SKILL.md`),
+    'Return: status (passed/failed/blocked), changed paths, commands actually run and outcomes, findings with file/line evidence, and remaining risks.',
+    'Tool failure or unavailable checks are not success. Do not claim independent verification of your own edits.',
+  ].filter(Boolean).join('\n');
+}
+
+function compileCodexAgent(role, profile, rules) {
+  return [
+    `name = ${JSON.stringify(`skill-manager-${role}`)}`,
+    `description = ${JSON.stringify(profile.description)}`,
+    ...(profile.readOnly ? ['sandbox_mode = "read-only"'] : []),
+    `developer_instructions = ${JSON.stringify(roleInstructions(role, profile, rules))}`,
+    '',
+  ].join('\n');
+}
+
+function compileSubagentContract() {
+  return [
+    '# Subagent Working Contract',
+    '',
+    'Use native delegation for independent work or separate review when it materially helps the task. Keep short or tightly dependent work local.',
+    '',
+    '## Dispatch',
+    '',
+    '1. Record the user goal, acceptance criteria, baseline changes, risk, and file ownership. The parent owns integration and final verification.',
+    '2. Use at most 3 concurrent workers unless the project owner changes the budget. Avoid recursive spawning and respect host limits.',
+    '3. Give each worker a bounded goal, inputs, allowed write paths (or read-only), checks, and required evidence. Allocate disjoint write sets or use host-provided isolated worktrees.',
+    '4. Codex: use available native spawn/message/wait/close tools. Select a skill-manager role when supported; otherwise use a native worker/explorer with the role instructions. Antigravity: use invoke_subagent with a registered subagent role, following the live tool schema.',
+    '5. Do not invent tool arguments or claim spawning from a Markdown role name alone. If unavailable, report the limitation and do not label sequential self-review as independent review.',
+    '',
+    '## Verification and Integration',
+    '',
+    '- Collect terminal status and actual artifacts before integration. Resolve conflicting findings from evidence, not majority vote.',
+    '- After implementation, assign a different Reviewer a stable final diff and acceptance criteria. Reviewers do not edit the patch being reviewed.',
+    '- Assign QA relevant checks against the integrated result. Tests running before the final edit do not verify the final state.',
+    '- Request a focused correction for reproduced defects, then rerun affected checks and review changed risk areas. Stop after 3 repair rounds and report unresolved failures.',
+    '- Report review skipped/blocked separately from tests passed. A missing reviewer is not independent approval.',
+    '- Close completed workers, cancel obsolete work, and report changes, tests, review evidence, limitations, and outstanding debt.',
+    '- Workers do not stage, commit, deploy, publish, or alter credentials. Only the coordinator may perform an authorized release under the project Git policy.',
+    '',
+    '## Project-local Skill Adaptation',
+    '',
+    '- Reuse an existing matching skill first. Create a new skill only for a concrete gap, or adapt one based on observed failures.',
+    '- Use initskill skill create/update/validate with JSON results. Scope changes to .agents/skills; do not modify global skills, AGENTS.md safety policy, or user rules as a side effect.',
+    '- Before update, read the current skill and retain its hash. An update requires an explicit optimistic-concurrency hash and makes a backup.',
+    '- Include a discriminating trigger, inputs/constraints, useful procedure, observable outputs, and task-relevant verification. Do not copy secrets or unrelated conversation history.',
+    '- Validate metadata and independently exercise a realistic task in an isolated workspace. Structural validation is not proof of useful behavior.',
+    '- The parent reviews and adopts the skill; a worker cannot approve its own instruction changes. Respect existing permissions and never weaken guardrails to complete a task.',
+    '',
+  ].join('\n');
+}
 
 const CATEGORY_LABELS = {
   core: 'พื้นฐาน',
@@ -94,6 +228,34 @@ export function getProfileRules(rules, profile = 'general') {
 function getRulesByKeys(rules, keys) {
   const wanted = new Set(keys);
   return rules.filter((rule) => wanted.has(ruleKey(rule)));
+}
+
+export function getCatalogue(skillsDir = SKILLS_DIR) {
+  const rules = discoverRules(skillsDir);
+  return {
+    targets: ['auto', ...TARGETS],
+    modes: ['agent', 'skill'],
+    defaults: { target: 'auto', mode: 'agent', profile: 'general' },
+    profiles: Object.entries(PROFILES).map(([id, ruleIds]) => ({ id, ruleIds })),
+    agents: Object.entries(ROLE_PROFILES).map(([id, profile]) => ({
+      id, codexName: `skill-manager-${id}`, antigravityName: id, description: profile.description,
+      readOnly: Boolean(profile.readOnly),
+    })),
+    skills: rules.map((rule) => ({
+      id: ruleKey(rule), name: skillSlug(rule), title: rule.title,
+      category: rule.category, description: skillDescription(rule),
+    })),
+  };
+}
+
+function selectRulesByIds(rules, ids) {
+  const selected = new Set();
+  for (const id of ids) {
+    const rule = rules.find((item) => ruleKey(item) === id.replaceAll('\\', '/').toLowerCase() || skillSlug(item) === id);
+    if (!rule) throw new Error(`ไม่รู้จัก rule: ${id} (ดู initskill list --json)`);
+    selected.add(rule);
+  }
+  return rules.filter((rule) => selected.has(rule));
 }
 
 function walkMarkdown(directory) {
@@ -136,7 +298,7 @@ export function compileRules(rules, { generatedAt = false } = {}) {
   return header + sections.join('\n\n---\n\n') + '\n';
 }
 
-export function compileAgent(rules, { name = 'engineering-team', responsibility = 'ทำงานเป็นทีมเสมือนที่มี Developer, Tester/QA, CI/CD และ Git/Release' } = {}) {
+export function compileAgent(rules, { name = 'engineering-team', responsibility = 'ทำงานเป็นทีมเสมือนที่มี Developer, Tester/QA, CI/CD และ Git/Release', includeRules = true } = {}) {
   if (rules.length === 0) throw new Error('เลือกกฎอย่างน้อย 1 รายการ');
   const protocol = [
     '# Project Agent Instructions',
@@ -173,15 +335,13 @@ export function compileAgent(rules, { name = 'engineering-team', responsibility 
     '## Selected Team Rules',
     '',
   ].join('\n');
-  return protocol + compileRules(rules).replace(/^<!-- Generated by Local Agent Skill Manager -->\n\n/, '');
+  return protocol + (includeRules
+    ? compileRules(rules).replace(/^<!-- Generated by Local Agent Skill Manager -->\n\n/, '')
+    : '\nChoose relevant skills from the catalogue in the workspace root AGENTS.md; read their SKILL.md before use. Do not load every skill or claim delegation unless the host actually provides it.\n');
 }
 
 function compileWorkspaceRule(rules) {
   if (rules.length === 0) throw new Error('เลือกกฎอย่างน้อย 1 รายการ');
-  const sections = rules.map((rule) => [
-    `## ${rule.title}`,
-    rule.content.replace(/^#\s+.+?\s*$/m, '').trim(),
-  ].join('\n\n'));
   return [
     '---',
     'trigger: model_decision',
@@ -190,7 +350,10 @@ function compileWorkspaceRule(rules) {
     '',
     '# Engineering Team Rules',
     '',
-    sections.join('\n\n---\n\n'),
+    'Follow the working agreement and skill catalogue in the workspace root AGENTS.md.',
+    'Select only skills whose descriptions match the current task and read their SKILL.md before use.',
+    'Use Developer for implementation, QA for verification, CI/CD for pipeline changes, and Git for commits or releases.',
+    'Read the project Git policy before committing. Markdown instructions do not grant tool permissions.',
     '',
   ].join('\n');
 }
@@ -204,11 +367,11 @@ function skillSlug(rule) {
 
 function compileSkill(rule) {
   const name = skillSlug(rule);
-  const description = `${rule.title}. Use this skill when this guidance is relevant to the task.`;
+  const description = skillDescription(rule);
   return [
     '---',
     `name: ${name}`,
-    `description: "${description.replaceAll('"', '\\"')}"`,
+    `description: ${JSON.stringify(description)}`,
     '---',
     '',
     `# ${rule.title}`,
@@ -219,7 +382,7 @@ function compileSkill(rule) {
     '',
     '## When to Use',
     '',
-    `Use this skill when the task involves ${rule.title.toLowerCase()} or when the user explicitly requests this workflow.`,
+    description,
     '',
     '## Inputs',
     '',
@@ -367,12 +530,12 @@ function compileTechnicalDebtTemplate() {
   ].join('\n');
 }
 
-function compilePortableGuide(mode) {
+function compilePortableGuide(mode, target, rules) {
   return [
     MANAGED_START,
     '# Project Agent Guide',
     '',
-    '<!-- Portable entrypoint shared by Codex, Antigravity, and other coding agents. -->',
+    `<!-- Target: ${target}; mode: ${mode}. Entrypoint for Codex and Antigravity. -->`,
     '',
     '## Working Agreement',
     '',
@@ -391,10 +554,39 @@ function compilePortableGuide(mode) {
     '- Project context: `.agents/project/project-context.md`',
     '- Architecture decisions: `.agents/project/architecture.md`',
     '- Technical debt register: `.agents/project/technical-debt.md`',
-    mode === 'agent'
-      ? '- Antigravity custom agents: `.agents/agents/` (use `/agents` in Antigravity CLI; the IDE picker depends on its version).'
-      : '- Antigravity skills: `.agents/skills/` (load only the skill relevant to the current task).',
-    '- Antigravity workspace rules: `.agents/rules/`',
+    '- Shared skills: `.agents/skills/` (load only skills relevant to the current task).',
+    ...(target !== 'antigravity' ? [
+      '- Codex reads this AGENTS.md and discovers project skills under `.agents/skills/`.',
+      '- In Codex CLI/IDE, mention `$skill-name` or use `/skills`; Antigravity custom agent files are not Codex agent registrations.',
+      ...(mode === 'agent' ? ['- Codex native custom subagents: `.codex/agents/skill-manager-*.toml` (requires a host version supporting standalone agent files).'] : []),
+    ] : []),
+    ...(target !== 'codex' ? [
+      ...(mode === 'agent' ? ['- Antigravity custom agents: `.agents/agents/` (use `/agents` in Antigravity CLI).', '- Antigravity workspace rules: `.agents/rules/`.'] : []),
+      '- Antigravity discovers `.agents/skills/`; mention a skill by name or use its slash command where supported.',
+    ] : []),
+    '',
+    '## Choose Skills for the Current Task',
+    '',
+    '- Match the user request to the descriptions below. Read the selected SKILL.md before applying it.',
+    '- Select Developer for implementation, QA for tests/review, CI/CD for pipelines, and Git for version-control tasks.',
+    '- Use the team workflow when coordination across roles is needed. Simple tasks do not require every role.',
+    '- Use existing host delegation tools when available; otherwise perform the relevant roles sequentially and report that honestly.',
+    '- A question or diagnosis authorizes inspection; it does not by itself authorize code changes, commits, or deployments.',
+    compileSkillCatalogue(rules),
+    '',
+    '## Delegation and Skill Adaptation',
+    '',
+    '- Follow `.agents/project/subagent-contract.md` for native dispatch, disjoint write scopes, independent review, and final-state verification.',
+    '- You may use relevant native subagents for authorized project work. Keep the coordinator responsible for integration; do not exceed the contract budget or invent unavailable tools.',
+    '- After non-trivial implementation, obtain a separate Reviewer and QA evidence when tools are available. Report blocked/skipped review explicitly.',
+    '- For a concrete task gap, you may create or adapt project-local skills under `.agents/skills/`; read the existing skill first, preserve its scope and guardrails, and validate before adopting it.',
+    '- Use `initskill skill create/update/validate --help` for safe writes; updates require the existing hash and keep backups. Do not modify global skills or publish as a side effect.',
+    ...(mode === 'agent' ? [
+      '',
+      '### Available Native Roles',
+      '',
+      ...selectedRoles(rules).map(([role, profile]) => `- ${role}: ${profile.description}${target !== 'antigravity' ? ` [Codex](.codex/agents/skill-manager-${role}.toml)` : ''}${target !== 'codex' ? ` [Antigravity](.agents/agents/${role}/agent.md)` : ''}`),
+    ] : []),
     '',
     '## Agent Handoff',
     '',
@@ -441,81 +633,89 @@ function validFrontmatter(content, expectedName = null) {
   );
 }
 
-export function buildGeneratedFiles(rules, outputDir = process.cwd(), mode = 'skill', commitPolicy = null) {
+export function buildGeneratedFiles(rules, outputDir = process.cwd(), mode = 'skill', commitPolicy = null, requestedTarget = 'antigravity') {
   if (!['skill', 'agent'].includes(mode)) throw new Error(`ไม่รู้จักโหมด: ${mode}`);
   if (rules.length === 0) throw new Error('เลือกกฎอย่างน้อย 1 รายการ');
   if (commitPolicy && !['ask', 'auto', 'off'].includes(commitPolicy)) {
     throw new Error(`นโยบาย Git ไม่ถูกต้อง: ${commitPolicy}`);
   }
 
+  const target = resolveTarget(outputDir, requestedTarget);
   const configPath = join(outputDir, PROJECT_CONFIG);
-  let configContent = JSON.stringify({ git: { commitPolicy: 'ask' } }, null, 2) + '\n';
-  let preserveConfig = false;
-  if (existsSync(configPath)) {
-    const existingConfig = parseProjectConfig(readFileSync(configPath, 'utf8'));
-    if (!commitPolicy) {
-      preserveConfig = true;
-    } else {
-      configContent = `${JSON.stringify({
-        ...existingConfig,
-        git: { ...(existingConfig.git ?? {}), commitPolicy },
-      }, null, 2)}\n`;
-    }
-  } else if (commitPolicy) {
-    configContent = `${JSON.stringify({ git: { commitPolicy } }, null, 2)}\n`;
-  }
+  const existingConfig = existsSync(configPath) ? parseProjectConfig(readFileSync(configPath, 'utf8')) : {};
+  const configContent = JSON.stringify({
+    ...existingConfig,
+    target,
+    mode,
+    git: { ...(existingConfig.git ?? {}), commitPolicy: commitPolicy ?? existingConfig.git?.commitPolicy ?? 'ask' },
+  }, null, 2) + '\n';
 
   const commonFiles = [
-    { relativePath: 'AGENTS.md', content: compilePortableGuide(mode), mergeManaged: true },
+    { relativePath: 'AGENTS.md', content: compilePortableGuide(mode, target, rules), mergeManaged: true },
     { relativePath: join('.agents', 'project', 'project-context.md'), content: compileProjectContext(outputDir) },
     { relativePath: join('.agents', 'project', 'architecture.md'), content: compileArchitectureTemplate(), preserveIfExists: true },
     { relativePath: join('.agents', 'project', 'technical-debt.md'), content: compileTechnicalDebtTemplate(), preserveIfExists: true },
+    { relativePath: join('.agents', 'project', 'subagent-contract.md'), content: compileSubagentContract() },
     {
       relativePath: PROJECT_CONFIG,
       content: configContent,
-      ...(preserveConfig ? { preserveIfExists: true } : {}),
     },
   ];
 
-  const modeFiles = mode === 'skill'
-    ? rules.map((rule) => ({
+  const skillFiles = rules.map((rule) => ({
         relativePath: join('.agents', 'skills', skillSlug(rule), 'SKILL.md'),
         content: compileSkill(rule),
-      }))
-    : [
+      }));
+  const agentFiles = mode === 'agent' && target !== 'codex' ? [
         {
           relativePath: join('.agents', 'agents', 'engineering-team', 'agent.md'),
           content: [
             '---',
             'name: engineering-team',
             'description: A general-purpose software engineering agent for development, testing, CI/CD, Git, and technical debt analysis.',
+            'mainAgent: true',
+            'subagent: false',
+            'model: inherit',
+            'commandExecutionPolicy: sandbox',
             '---',
             '',
-            compileAgent(rules, { name: 'engineering-team' }),
+            compileAgent(rules, { name: 'engineering-team', includeRules: false }),
           ].join('\n'),
         },
         { relativePath: join('.agents', 'rules', '00-engineering-team.md'), content: compileWorkspaceRule(rules) },
-        ...Object.entries(ROLE_PROFILES).flatMap(([role, profile]) => {
-          const roleRules = getRulesByKeys(rules, profile.rules);
-          if (roleRules.length === 0) return [];
+        ...selectedRoles(rules).flatMap(([role, profile]) => {
           return [{
             relativePath: join('.agents', 'agents', role, 'agent.md'),
             content: [
               '---',
               `name: ${role}`,
               `description: ${profile.description}`,
+              'mainAgent: false',
+              'subagent: true',
+              'model: inherit',
+              'commandExecutionPolicy: sandbox',
+              'tools:',
+              '  - view_file',
+              '  - grep_search',
+              ...(profile.readOnly ? [] : ['  - run_command']),
+              ...(['developer', 'skill-author', 'ci-cd'].includes(role) ? ['  - replace_file_content'] : []),
               '---',
               '',
-              compileAgent(roleRules, { name: role, responsibility: profile.description }),
+              roleInstructions(role, profile, rules),
             ].join('\n'),
           }];
         }),
-      ];
-  return [...commonFiles, ...modeFiles];
+      ] : [];
+  const codexFiles = mode === 'agent' && target !== 'antigravity'
+    ? selectedRoles(rules).map(([role, profile]) => ({
+      relativePath: join('.codex', 'agents', `skill-manager-${role}.toml`),
+      content: compileCodexAgent(role, profile, rules),
+    })) : [];
+  return [...commonFiles, ...skillFiles, ...agentFiles, ...codexFiles];
 }
 
 export function planCompiledRules(rules, outputDir = process.cwd(), mode = 'skill', options = {}) {
-  const files = buildGeneratedFiles(rules, outputDir, mode, options.commitPolicy ?? null);
+  const files = buildGeneratedFiles(rules, outputDir, mode, options.commitPolicy ?? null, options.target ?? 'antigravity');
   return createWritePlan({
     root: outputDir,
     files,
@@ -530,6 +730,7 @@ function checkSkillFrontmatter(content) {
 }
 
 function checkRuleFrontmatter(content) {
+  if (Buffer.byteLength(content, 'utf8') > 24000) return false;
   const fields = parseFrontmatter(content);
   if (!fields?.trigger || !['always_on', 'model_decision', 'glob', 'manual'].includes(fields.trigger)) return false;
   if (fields.trigger === 'model_decision' && !fields.description) return false;
@@ -537,10 +738,33 @@ function checkRuleFrontmatter(content) {
   return true;
 }
 
-export function diagnoseProject(projectDir = process.cwd(), requestedMode = 'auto') {
+function checkCodexAgent(content, expectedName) {
+  // Validate the standalone scalar schema emitted by this manager. The host parses the full TOML.
+  const fields = {};
+  try {
+    for (const key of ['name', 'description', 'developer_instructions', 'sandbox_mode']) {
+      const value = content.match(new RegExp(`^${key}\\s*=\\s*("(?:\\\\.|[^"\\\\])*")\\s*$`, 'm'))?.[1];
+      if (value) fields[key] = JSON.parse(value);
+    }
+  } catch { return false; }
+  return fields.name === expectedName && Boolean(fields.description?.trim())
+    && Boolean(fields.developer_instructions?.trim())
+    && (expectedName !== 'skill-manager-reviewer' || fields.sandbox_mode === 'read-only');
+}
+
+export function diagnoseProject(projectDir = process.cwd(), requestedMode = 'auto', requestedTarget = 'auto') {
   if (!['auto', 'agent', 'skill', 'both'].includes(requestedMode)) {
     throw new Error(`โหมด doctor ไม่ถูกต้อง: ${requestedMode}`);
   }
+  validateTarget(requestedTarget);
+  let config = null;
+  const configPath = join(projectDir, PROJECT_CONFIG);
+  if (existsSync(configPath)) {
+    try { config = parseProjectConfig(readFileSync(configPath, 'utf8')); } catch { /* reported below */ }
+  }
+  const target = requestedTarget !== 'auto' ? requestedTarget
+    : TARGETS.includes(config?.target) ? config.target
+      : existsSync(join(projectDir, '.agents', 'agents')) ? 'antigravity' : 'both';
   const checks = [];
   const checkFile = (relativePath, predicate = () => true, { optional = false } = {}) => {
     const path = join(projectDir, relativePath);
@@ -549,14 +773,16 @@ export function diagnoseProject(projectDir = process.cwd(), requestedMode = 'aut
     checks.push({ path: relativePath, ok: Boolean(valid), optional });
   };
 
-  checkFile('AGENTS.md');
+  checkFile('AGENTS.md', (content) => content.trim().length > 0);
   checkFile(join('.agents', 'project', 'project-context.md'));
   checkFile(join('.agents', 'project', 'architecture.md'));
   checkFile(join('.agents', 'project', 'technical-debt.md'));
   checkFile(PROJECT_CONFIG, (content) => {
     try {
       const config = parseProjectConfig(content);
-      return ['ask', 'auto', 'off'].includes(config?.git?.commitPolicy);
+      return ['ask', 'auto', 'off'].includes(config?.git?.commitPolicy)
+        && (config.target === undefined || TARGETS.includes(config.target))
+        && (config.mode === undefined || ['agent', 'skill'].includes(config.mode));
     } catch { return false; }
   }, { optional: true });
 
@@ -568,24 +794,56 @@ export function diagnoseProject(projectDir = process.cwd(), requestedMode = 'aut
   const skillFiles = listMarkdownFiles(skillsRoot).filter((path) => path.split(/[\\/]/).at(-1) === 'SKILL.md');
   const hasSkill = skillFiles.length > 0 || manifest?.modes?.includes('skill');
   const modes = requestedMode === 'auto'
-    ? [...new Set([...(manifest?.modes ?? []), ...(hasAgent ? ['agent'] : []), ...(hasSkill ? ['skill'] : [])])]
+    ? config?.mode && ['agent', 'skill'].includes(config.mode) ? [config.mode]
+      : [...new Set([...(manifest?.modes ?? []), ...(hasAgent ? ['agent'] : []), ...(hasSkill ? ['skill'] : [])])]
     : requestedMode === 'both' ? ['agent', 'skill'] : [requestedMode];
 
   if (modes.length === 0) checks.push({ path: '.agents (Agent หรือ Skill)', ok: false, optional: false });
-  if (modes.includes('agent')) {
+  if (modes.includes('agent') && target !== 'codex') {
     checkFile(agentFile, (content) => validFrontmatter(content, 'engineering-team'));
     checkFile(join('.agents', 'rules', '00-engineering-team.md'), checkRuleFrontmatter);
     const agentsRoot = join(projectDir, '.agents', 'agents');
     for (const agentPath of listMarkdownFiles(agentsRoot).filter((path) => path.split(/[\\/]/).at(-1) === 'agent.md')) {
       const rel = relative(projectDir, agentPath);
       if (rel === agentFile) continue;
-      checkFile(rel, (content) => validFrontmatter(content));
+      checkFile(rel, (content) => {
+        if (!validFrontmatter(content)) return false;
+        const fields = parseFrontmatter(content);
+        return !Object.hasOwn(ROLE_PROFILES, fields.name)
+          || (fields.subagent === 'true' && fields.mainAgent === 'false');
+      });
     }
   }
-  if (modes.includes('skill')) {
+  if (modes.includes('skill') || (modes.includes('agent') && target !== 'antigravity')) {
     if (skillFiles.length === 0) checks.push({ path: join('.agents', 'skills', '**', 'SKILL.md'), ok: false, optional: false });
     for (const skillPath of skillFiles) {
       checkFile(relative(projectDir, skillPath), checkSkillFrontmatter);
+    }
+  }
+  // Catch deleted selected skills even when other skills remain discoverable.
+  const guidePath = join(projectDir, 'AGENTS.md');
+  if (existsSync(guidePath)) {
+    const guide = readFileSync(guidePath, 'utf8');
+    if (guide.includes('.agents/project/subagent-contract.md')) checkFile(join('.agents', 'project', 'subagent-contract.md'), (content) => content.trim().length > 0);
+    for (const match of guide.matchAll(/\]\((\.agents\/skills\/[a-z0-9-]+\/SKILL\.md)\)/g)) {
+      if (!checks.some((check) => check.path.replaceAll('\\', '/') === match[1])) {
+        checkFile(match[1], checkSkillFrontmatter);
+      }
+    }
+    if (modes.includes('agent') && target !== 'antigravity') {
+      checkFile(join('.codex', 'agents', 'skill-manager-reviewer.toml'), (content) => checkCodexAgent(content, 'skill-manager-reviewer'));
+      for (const match of guide.matchAll(/\]\((\.codex\/agents\/skill-manager-([a-z0-9-]+)\.toml)\)/g)) {
+        if (!checks.some((check) => check.path.replaceAll('\\', '/') === match[1])) {
+          checkFile(match[1], (content) => checkCodexAgent(content, `skill-manager-${match[2]}`));
+        }
+      }
+    }
+    if (modes.includes('agent') && target !== 'codex') {
+      for (const match of guide.matchAll(/\]\((\.agents\/agents\/([a-z0-9-]+)\/agent\.md)\)/g)) {
+        if (!checks.some((check) => check.path.replaceAll('\\', '/') === match[1])) {
+          checkFile(match[1], (content) => validFrontmatter(content, match[2]) && parseFrontmatter(content).subagent === 'true');
+        }
+      }
     }
   }
   if (existsSync(join(projectDir, '.agent-skill-manager.json'))) {
@@ -594,11 +852,11 @@ export function diagnoseProject(projectDir = process.cwd(), requestedMode = 'aut
   return checks;
 }
 
-export function runDoctor(projectDir = process.cwd(), { mode = 'auto', json = false } = {}) {
-  const checks = diagnoseProject(projectDir, mode);
+export function runDoctor(projectDir = process.cwd(), { mode = 'auto', target = 'auto', json = false } = {}) {
+  const checks = diagnoseProject(projectDir, mode, target);
   const failed = checks.filter((check) => !check.ok);
   if (json) {
-    console.log(JSON.stringify({ ok: failed.length === 0, mode, checks }, null, 2));
+    console.log(JSON.stringify({ ok: failed.length === 0, mode, target, checks }, null, 2));
   } else {
     for (const check of checks) console.log(`${check.ok ? 'ผ่าน' : 'ไม่ผ่าน'}: ${check.path}`);
     if (failed.length > 0) console.log(`\nตรวจพบ ${failed.length} รายการที่ต้องแก้ไข`);
@@ -612,6 +870,7 @@ export function writeCompiledRules(rules, outputDir = process.cwd(), mode = 'ski
   const plan = planCompiledRules(rules, outputDir, mode, {
     conflictPolicy: options.conflictPolicy ?? 'error',
     commitPolicy: options.commitPolicy ?? null,
+    target: options.target ?? 'antigravity',
   });
   if (plan.entries.some((entry) => entry.action === 'conflict')) {
     throw new Error('ไฟล์ชนกัน ต้องเลือกนโยบายก่อนเขียน');
@@ -720,6 +979,9 @@ export async function runInteractive({
   nonInteractive = false,
   conflictPolicy = null,
   commitPolicy = null,
+  target: requestedTarget = null,
+  ruleIds = null,
+  json = false,
 } = {}) {
   const rules = discoverRules(skillsDir);
   if (rules.length === 0) {
@@ -731,21 +993,36 @@ export async function runInteractive({
   let mode;
   let selected;
   const interactiveTerminal = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  if (nonInteractive || !interactiveTerminal) {
+  if (json) nonInteractive = true;
+  const target = resolveTarget(outputDir, requestedTarget ?? (interactiveTerminal && !nonInteractive ? await select({
+    message: 'ใช้กับ AI ตัวไหน',
+    default: resolveTarget(outputDir),
+    choices: [
+      { name: 'Codex + Antigravity — ใช้ร่วมกัน (แนะนำ)', value: 'both' },
+      { name: 'Codex', value: 'codex' },
+      { name: 'Antigravity', value: 'antigravity' },
+      { name: 'อัตโนมัติ — ใช้ค่าของโปรเจกต์หรือ AI ที่เรียกคำสั่ง', value: 'auto' },
+    ],
+  }) : 'auto'));
+  if (ruleIds) {
+    selected = selectRulesByIds(rules, ruleIds);
+    mode = requestedMode ?? 'agent';
+    nonInteractive = true;
+  } else if (nonInteractive || !interactiveTerminal) {
     mode = requestedMode ?? 'agent';
     const profile = requestedProfile ?? 'general';
     if (profile === 'custom') throw new Error('โหมด --non-interactive ยังไม่รองรับ --profile custom ให้ใช้ profile ที่กำหนดไว้');
     selected = getProfileRules(rules, profile);
     if (!nonInteractive) {
-      console.log('ไม่พบ interactive terminal: ใช้ Agent ชุดทั่วไปอัตโนมัติ (ระบุ --mode skill หากต้องการสร้าง Skill)');
+      console.log(`ไม่พบ interactive terminal: ใช้ ${mode} / ${profile} สำหรับ ${target}`);
       nonInteractive = true;
     }
   } else {
     const startMode = requestedMode ? 'custom' : await select({
       message: 'เริ่มต้นใช้งานแบบไหน',
       choices: [
-        { name: 'เริ่มงานทั่วไป (แนะนำ) — Antigravity Agent พร้อมทำงาน', value: 'recommended-agent' },
-        { name: 'สร้าง Skill ทั่วไป — Antigravity Skill สำหรับโปรเจกต์', value: 'recommended-skill' },
+        { name: 'เริ่มงานทั่วไป (แนะนำ) — ทีมพัฒนาพร้อมเลือก Skill ตามงาน', value: 'recommended-agent' },
+        { name: 'สร้าง Skill ทั่วไป — ความสามารถแยกเป็นรายการ', value: 'recommended-skill' },
         { name: 'ตั้งค่าเอง — สำหรับการใช้งานขั้นสูง', value: 'custom' },
       ],
     });
@@ -756,8 +1033,8 @@ export async function runInteractive({
       mode = requestedMode ?? await select({
         message: 'เลือกชนิดไฟล์ที่ต้องการสร้าง',
         choices: [
-          { name: 'Agent — สร้าง custom agent ใน Antigravity', value: 'agent' },
-          { name: 'Skill — สร้าง skill มาตรฐานใน Antigravity', value: 'skill' },
+          { name: 'Agent — ตั้งค่าทีมพัฒนาสำหรับ AI ที่เลือก', value: 'agent' },
+          { name: 'Skill — สร้างความสามารถเฉพาะงาน', value: 'skill' },
         ],
       });
     }
@@ -793,8 +1070,11 @@ export async function runInteractive({
   }
 
   const policy = conflictPolicy ?? (nonInteractive ? 'error' : 'prompt');
-  const plan = planCompiledRules(selected, outputDir, mode, { conflictPolicy: policy, commitPolicy });
-  printWritePlan(plan);
+  const plan = planCompiledRules(selected, outputDir, mode, { conflictPolicy: policy, commitPolicy, target });
+  if (!json) {
+    console.log(`AI: ${target} | โหมด: ${mode} | Skills: ${selected.length}`);
+    printWritePlan(plan);
+  }
   if (policy === 'prompt') await resolveInteractiveConflicts(plan);
   finalizeWritePlan(plan);
 
@@ -807,7 +1087,13 @@ export async function runInteractive({
     }
   }
   const result = applyWritePlan(plan, { dryRun });
-  if (dryRun) console.log('\nDry run: ไม่มีการเขียนไฟล์');
+  if (json) console.log(JSON.stringify({
+    ok: true, target, mode, dryRun,
+    written: result.written,
+    backups: result.backups.map((path) => relative(outputDir, path).replaceAll('\\', '/')),
+    files: plan.entries.map((entry) => ({ path: entry.key, action: entry.action })),
+  }, null, 2));
+  else if (dryRun) console.log('\nDry run: ไม่มีการเขียนไฟล์');
   else {
     const skipped = plan.entries.filter((entry) => ['keep', 'preserve'].includes(entry.action)).length;
     console.log(`\nเสร็จแล้ว: เขียน ${result.written.length} ไฟล์${skipped ? `, ข้าม/เก็บของเดิม ${skipped} ไฟล์` : ''}`);
@@ -817,10 +1103,45 @@ export async function runInteractive({
   return outputs;
 }
 
-const HELP_TEXT = `Local Agent Skill Manager CLI\n\nUsage:\n  initskill [init options]\n  initskill init [options]\n  initskill doctor [--mode auto|agent|skill|both] [--json]\n  initskill config git-policy [ask|auto|off] [--yes] [--dry-run]\n  initskill --version\n\nInit options:\n  --mode agent|skill          Output format\n  --profile general|developer|tester|delivery\n  --skills-dir <path>         Rule library (defaults to bundled skills)\n  --output-dir <path>         Project root (defaults to current directory)\n  --dry-run                   Preview only; do not write files\n  --non-interactive           Require --mode; profile defaults to general\n  --on-conflict keep|overwrite|error\n                              Non-interactive default: error; overwrite makes backups\n  --commit-policy ask|auto|off\n  -h, --help                  Show help\n  -v, --version               Show version\n\nCommit policy: ask requests approval, auto permits safe local checkpoint commits, off disables commits.\n`;
+const HELP_TEXT = `Local Agent Skill Manager CLI
+
+Usage:
+  initskill [init options]
+  initskill init [options]
+  initskill list [--json] [--skills-dir <path>]
+  initskill doctor [--target auto|codex|antigravity|both] [--mode auto|agent|skill|both] [--json]
+  initskill config git-policy [ask|auto|off] [--yes] [--dry-run]
+  initskill skill list|validate [--json]
+  initskill skill inspect <name> [--json]
+  initskill skill create <name> --description <text> [--from-file <SKILL.md>] [--json] [--dry-run]
+  initskill skill update <name> --from-file <SKILL.md> --expected-hash <sha256> [--json] [--dry-run]
+  initskill --version
+
+Init options:
+  --target auto|codex|antigravity|both
+                              AI host (default: auto; unknown host: both)
+  --mode agent|skill          Output format (headless default: agent)
+  --profile general|developer|tester|delivery
+  --rules <id,id>             Select rule IDs/names from list; do not combine with --profile
+  --skills-dir <path>         Rule library (defaults to bundled skills)
+  --output-dir <path>         Project root (defaults to current directory)
+  --dry-run                   Preview only; do not write files
+  --non-interactive           No menus; default profile: general
+  --json                      Machine-readable output; init runs without menus
+  --on-conflict keep|overwrite|error
+                              Headless default: error; overwrite makes backups
+  --commit-policy ask|auto|off
+  -h, --help                  Show help
+  -v, --version               Show version
+
+AI workflow: list --json -> select target/profile/rules -> init --json --dry-run -> init --json -> doctor --json.
+Agent mode registers Codex .codex/agents/*.toml and Antigravity .agents/agents/*/agent.md native roles for dispatch when host tools are available.
+Skill changes are project-local, validated, and protected by expected-hash checks and backups. They do not grant tool permissions.
+Commit policy: ask requests approval, auto permits safe local checkpoint commits, off disables commits.
+`;
 
 function parseCliArgs(args) {
-  const commandNames = new Set(['init', 'doctor', 'config', 'help', 'version']);
+  const commandNames = new Set(['init', 'list', 'skill', 'doctor', 'config', 'help', 'version']);
   let command = 'init';
   let index = 0;
   if (args[0] && !args[0].startsWith('-') && commandNames.has(args[0])) {
@@ -839,7 +1160,7 @@ function parseCliArgs(args) {
     if (!token.startsWith('--')) { options._.push(token); continue; }
     const [rawName, inlineValue] = token.slice(2).split(/=(.*)/s, 2);
     const key = rawName.replaceAll('-', '');
-    if (!['mode', 'profile', 'skillsdir', 'outputdir', 'onconflict', 'commitpolicy'].includes(key)) {
+    if (!['mode', 'profile', 'skillsdir', 'outputdir', 'onconflict', 'commitpolicy', 'target', 'rules', 'description', 'fromfile', 'expectedhash'].includes(key)) {
       throw new Error(`ไม่รู้จัก option: --${rawName}`);
     }
     const value = inlineValue ?? args[index++];
@@ -862,11 +1183,63 @@ async function main(args) {
   if (options.help || command === 'help') { console.log(HELP_TEXT); return; }
   if (options.version || command === 'version') { showVersion(); return; }
   const outputDir = resolve(options.outputdir ?? process.cwd());
+  if (options.target) validateTarget(options.target);
+
+  if (command === 'skill') {
+    const [action, name, ...extra] = options._;
+    if (extra.length || !['list', 'inspect', 'create', 'update', 'validate'].includes(action)) {
+      throw new Error('ใช้: initskill skill list|inspect|create|update|validate (ดู --help)');
+    }
+    if (['list', 'validate'].includes(action)) {
+      if (name) throw new Error(`${action} ไม่รองรับชื่อ Skill`);
+      const skills = validateProjectSkills(outputDir);
+      const ok = skills.every((skill) => skill.ok);
+      if (options.json) console.log(JSON.stringify({ ok, skills }, null, 2));
+      else for (const skill of skills) console.log(`${skill.ok ? 'ผ่าน' : 'ไม่ผ่าน'}: ${skill.path}${skill.errors.length ? ` — ${skill.errors.join('; ')}` : ''}`);
+      if (!ok) process.exitCode = 1;
+      return;
+    }
+    if (!name || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name) || name.length > 64) throw new Error('ระบุชื่อ Skill เป็น lowercase-name ไม่เกิน 64 ตัวอักษร');
+    if (action === 'inspect') {
+      const path = join(outputDir, '.agents', 'skills', name, 'SKILL.md');
+      const skill = validateProjectSkills(outputDir).find((item) => item.path === path);
+      if (!skill) throw new Error(`ไม่พบ Skill: ${name}`);
+      if (options.json) console.log(JSON.stringify(skill, null, 2));
+      else console.log(`${skill.path}\nSHA256: ${skill.hash ?? 'invalid'}\n${skill.description ?? skill.errors.join('; ')}`);
+      if (!skill.ok) process.exitCode = 1;
+      return;
+    }
+    if (action === 'update' && (!options.fromfile || !options.expectedhash)) throw new Error('update ต้องระบุ --from-file และ --expected-hash จากเวอร์ชันที่อ่านก่อนแก้');
+    if (action === 'create' && options.expectedhash) throw new Error('create ไม่ใช้ --expected-hash; ถ้าต้องการแก้ของเดิมให้ใช้ update');
+    if (!options.fromfile && !options.description) throw new Error('create ต้องระบุ --description หรือ --from-file');
+    const result = createProjectSkill({
+      projectDir: outputDir, name,
+      description: options.description ?? 'Imported project-local skill.',
+      ...(options.fromfile ? { sourceFile: resolve(options.fromfile) } : {}),
+      ...(options.expectedhash ? { expectedHash: options.expectedhash } : {}),
+      dryRun: options.dryRun ?? false, overwrite: action === 'update',
+    });
+    const output = { ok: true, action, draft: !options.fromfile, ...result };
+    if (options.json) console.log(JSON.stringify(output, null, 2));
+    else console.log(`${result.dryRun ? 'Dry run' : 'เสร็จแล้ว'}: ${result.path}${output.draft ? '\nเป็นโครงร่าง ต้องเพิ่มขั้นตอนเฉพาะงานและทดสอบก่อนใช้' : ''}${result.backup ? `\nสำรอง: ${result.backup}` : ''}`);
+    return;
+  }
+
+  if (command === 'list') {
+    if (options._.length) throw new Error(`list ไม่รองรับ argument: ${options._.join(' ')}`);
+    const catalogue = getCatalogue(resolve(options.skillsdir ?? SKILLS_DIR));
+    if (options.json) console.log(JSON.stringify(catalogue, null, 2));
+    else {
+      console.log('AI: auto, codex, antigravity, both\nชุดงาน: general, developer, tester, delivery\n');
+      for (const skill of catalogue.skills) console.log(`${skill.name}\n  ${skill.description}\n`);
+    }
+    return;
+  }
 
   if (command === 'doctor') {
     if (options._.length) throw new Error(`doctor ไม่รองรับ argument: ${options._.join(' ')}`);
     const mode = options.mode ?? 'auto';
-    runDoctor(outputDir, { mode, json: options.json });
+    runDoctor(outputDir, { mode, target: options.target ?? 'auto', json: options.json });
     return;
   }
   if (command === 'config') {
@@ -887,6 +1260,9 @@ async function main(args) {
   if (options.profile && !['general', 'developer', 'tester', 'delivery', 'custom'].includes(options.profile)) {
     throw new Error('--profile ต้องเป็น general, developer, tester, delivery หรือ custom');
   }
+  if (options.rules && options.profile) throw new Error('เลือก --rules หรือ --profile อย่างใดอย่างหนึ่ง');
+  const ruleIds = options.rules?.split(',').map((id) => id.trim()).filter(Boolean) ?? null;
+  if (ruleIds && !ruleIds.length) throw new Error('--rules ต้องระบุอย่างน้อย 1 รายการ');
   if (options.commitpolicy) validateCommitPolicy(options.commitpolicy);
   if (options.onconflict && !['keep', 'overwrite', 'error'].includes(options.onconflict)) {
     throw new Error('--on-conflict ต้องเป็น keep, overwrite หรือ error');
@@ -900,6 +1276,9 @@ async function main(args) {
     nonInteractive: options.nonInteractive ?? false,
     conflictPolicy: options.onconflict ?? null,
     commitPolicy: options.commitpolicy ?? null,
+    target: options.target ?? null,
+    ruleIds,
+    json: options.json ?? false,
   });
 }
 
@@ -909,7 +1288,8 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
       console.log('\nยกเลิกการทำงาน');
       process.exitCode = 130;
     } else {
-      console.error(`ผิดพลาด: ${error.message}`);
+      if (process.argv.includes('--json')) console.log(JSON.stringify({ ok: false, error: error.message }));
+      else console.error(`ผิดพลาด: ${error.message}`);
       process.exitCode = error.message.startsWith('ไฟล์มีอยู่แล้ว') ? 3 : 1;
     }
   });

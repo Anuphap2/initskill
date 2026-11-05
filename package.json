@@ -1,6 +1,6 @@
 {
   "name": "local-agent-skill-manager",
-  "version": "1.1.2",
+  "version": "1.3.0",
   "private": true,
   "type": "module",
   "description": "Interactive local Markdown rule compiler for AI coding assistants",
@@ -13,9 +13,12 @@
   "files": [
     "cli.mjs",
     "file-safety.mjs",
+    "skills-manager.mjs",
+    "release-bundle.mjs",
     "skills/",
     "README.md",
     "CHANGELOG.md",
+    "DISTRIBUTION.md",
     "install.mjs",
     "uninstall.mjs",
     "install.ps1",
@@ -27,9 +30,10 @@
     "initskill.cmd"
   ],
   "scripts": {
-    "check": "node --check cli.mjs && node --check file-safety.mjs && node --check install.mjs && node --check uninstall.mjs",
+    "check": "node --check cli.mjs && node --check file-safety.mjs && node --check skills-manager.mjs && node --check release-bundle.mjs && node --check install.mjs && node --check uninstall.mjs",
     "test": "node --test",
-    "verify": "npm run check && npm test && npm pack --dry-run"
+    "verify": "npm run check && npm test && npm pack --dry-run",
+    "release:bundle": "node release-bundle.mjs"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.5.0"
