@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync,
-  readFileSync, readdirSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+  readFileSync, readdirSync, rmSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -17,8 +17,18 @@ const REQUIRED_FILES = [
 const OPTIONAL_FILES = ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'NOTICE'];
 const PROTECTED_DIRS = ['skills', 'node_modules', '.git', '.agents', '.codex'];
 
+function isDarwinSystemLink(path) {
+  return process.platform === 'darwin' && (path === '/var' || path === '/tmp' || path === '/etc');
+}
+
 function statIfPresent(path) {
-  try { return lstatSync(path); }
+  try {
+    const stat = lstatSync(path);
+    if (isDarwinSystemLink(path) && stat.isSymbolicLink()) {
+      return statSync(path);
+    }
+    return stat;
+  }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 

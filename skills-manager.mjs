@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join, parse, relative, resolve, sep } from 'node:path';
 import { TextDecoder } from 'node:util';
 import { backupExistingFile, sha256, writeFileSafely } from './file-safety.mjs';
@@ -28,6 +28,10 @@ function pathString(value, label) {
   return resolve(value);
 }
 
+function isDarwinSystemLink(path) {
+  return process.platform === 'darwin' && (path === '/var' || path === '/tmp' || path === '/etc');
+}
+
 // The write helpers recheck links before writing. Reads and dry runs also need
 // protection, including project/source ancestors and dangling symbolic links.
 function inspectPath(path) {
@@ -44,7 +48,13 @@ function inspectPath(path) {
       if (error.code === 'ENOENT') return null;
       throw error;
     }
-    if (stat.isSymbolicLink()) throw new Error(`Unsafe symbolic link in path: ${current}`);
+    if (stat.isSymbolicLink()) {
+      if (isDarwinSystemLink(current)) {
+        stat = statSync(current);
+      } else {
+        throw new Error(`Unsafe symbolic link in path: ${current}`);
+      }
+    }
     if (index < parts.length - 1 && !stat.isDirectory()) {
       throw new Error(`Path ancestor is not a directory: ${current}`);
     }
