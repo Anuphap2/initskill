@@ -17,14 +17,12 @@ const REQUIRED_FILES = [
 const OPTIONAL_FILES = ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'NOTICE'];
 const PROTECTED_DIRS = ['skills', 'node_modules', '.git', '.agents', '.codex'];
 
-function isDarwinSystemLink(path) {
-  return process.platform === 'darwin' && (path === '/var' || path === '/tmp' || path === '/etc');
-}
+const SYSTEM_ROOT_ALIASES = new Set(process.platform === 'darwin' ? ['/var', '/tmp', '/etc'] : []);
 
 function statIfPresent(path) {
   try {
     const stat = lstatSync(path);
-    if (isDarwinSystemLink(path) && stat.isSymbolicLink()) {
+    if (SYSTEM_ROOT_ALIASES.has(path) && stat.isSymbolicLink()) {
       return statSync(path);
     }
     return stat;
@@ -32,9 +30,10 @@ function statIfPresent(path) {
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
 }
 
-// lstat also detects dangling links; checking only existsSync would miss them.
+// Accept system aliases before project/bundle root, then check for user symlinks.
 function assertNoLinks(path) {
   for (let current = resolve(path);; current = dirname(current)) {
+    if (SYSTEM_ROOT_ALIASES.has(current)) break;
     if (statIfPresent(current)?.isSymbolicLink()) throw new Error(`Refusing symbolic link: ${current}`);
     if (current === dirname(current)) break;
   }

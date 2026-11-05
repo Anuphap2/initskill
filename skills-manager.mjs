@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { basename, dirname, join, parse, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { TextDecoder } from 'node:util';
 import { backupExistingFile, sha256, writeFileSafely } from './file-safety.mjs';
 
@@ -28,14 +28,51 @@ function pathString(value, label) {
   return resolve(value);
 }
 
-function isDarwinSystemLink(path) {
-  return process.platform === 'darwin' && (path === '/var' || path === '/tmp' || path === '/etc');
+const SYSTEM_ROOT_ALIASES = new Set(process.platform === 'darwin' ? ['/var', '/tmp', '/etc'] : []);
+
+// Accept system aliases before project root, then check symlinks from project root down to target file.
+function projectRoot(projectDir) {
+  const root = pathString(projectDir, 'projectDir');
+  let stat;
+  try {
+    stat = lstatSync(root);
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`Project directory is missing or not a directory: ${root}`);
+    throw error;
+  }
+  if (stat.isSymbolicLink()) throw new Error(`Unsafe symbolic link in path: ${root}`);
+  if (!stat.isDirectory()) throw new Error(`Project directory is missing or not a directory: ${root}`);
+  return root;
 }
 
 // The write helpers recheck links before writing. Reads and dry runs also need
 // protection, including project/source ancestors and dangling symbolic links.
-function inspectPath(path) {
+function inspectPath(path, root) {
   const absolute = resolve(path);
+  const base = root ? resolve(root) : null;
+  if (base) {
+    const rel = relative(base, absolute);
+    if (!rel.startsWith('..') && !isAbsolute(rel)) {
+      let current = base;
+      const parts = rel.split(sep).filter(Boolean);
+      for (let index = 0; index < parts.length; index += 1) {
+        current = join(current, parts[index]);
+        let stat;
+        try {
+          stat = lstatSync(current);
+        } catch (error) {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        }
+        if (stat.isSymbolicLink()) throw new Error(`Unsafe symbolic link in path: ${current}`);
+        if (index < parts.length - 1 && !stat.isDirectory()) {
+          throw new Error(`Path ancestor is not a directory: ${current}`);
+        }
+      }
+      try { return lstatSync(absolute); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    }
+  }
+
   const anchor = parse(absolute).root;
   let current = anchor;
   let stat;
@@ -48,24 +85,16 @@ function inspectPath(path) {
       if (error.code === 'ENOENT') return null;
       throw error;
     }
-    if (stat.isSymbolicLink()) {
-      if (isDarwinSystemLink(current)) {
-        stat = statSync(current);
-      } else {
-        throw new Error(`Unsafe symbolic link in path: ${current}`);
-      }
+    if (SYSTEM_ROOT_ALIASES.has(current)) {
+      stat = statSync(current);
+      continue;
     }
+    if (stat.isSymbolicLink()) throw new Error(`Unsafe symbolic link in path: ${current}`);
     if (index < parts.length - 1 && !stat.isDirectory()) {
       throw new Error(`Path ancestor is not a directory: ${current}`);
     }
   }
   return stat;
-}
-
-function projectRoot(projectDir) {
-  const root = pathString(projectDir, 'projectDir');
-  if (!inspectPath(root)?.isDirectory()) throw new Error(`Project directory is missing or not a directory: ${root}`);
-  return root;
 }
 
 function decode(bytes, path) {
@@ -78,8 +107,8 @@ function decode(bytes, path) {
   }
 }
 
-function readRegularFile(path) {
-  if (!inspectPath(path)?.isFile()) throw new Error(`Skill file is missing or not a regular file: ${path}`);
+function readRegularFile(path, root) {
+  if (!inspectPath(path, root)?.isFile()) throw new Error(`Skill file is missing or not a regular file: ${path}`);
   return readFileSync(path);
 }
 
@@ -142,15 +171,15 @@ function defaultBody(name, description) {
     + 'Report the result, evidence, uncertainties, and any unfinished work; do not claim checks were run without evidence.\n';
 }
 
-function existingBytes(path) {
-  const stat = inspectPath(path);
+function existingBytes(path, root) {
+  const stat = inspectPath(path, root);
   if (!stat) return null;
   if (!stat.isFile()) throw new Error(`Skill destination is not a regular file: ${path}`);
   return readFileSync(path);
 }
 
-function checkIntegrity(path, expectedHash) {
-  const current = existingBytes(path);
+function checkIntegrity(path, expectedHash, root) {
+  const current = existingBytes(path, root);
   if (current === null || sha256(current) !== expectedHash) {
     throw new Error(`Integrity error: missing file or stale expectedHash for ${path}`);
   }
@@ -179,31 +208,31 @@ export function createProjectSkill({ projectDir, name, description, body, source
   const path = join(root, relativePath);
   const content = sourceFile === undefined
     ? Buffer.from(`---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body ?? defaultBody(name, description)}`, 'utf8')
-    : readRegularFile(pathString(sourceFile, 'sourceFile'));
+    : readRegularFile(pathString(sourceFile, 'sourceFile'), root);
   const { hash } = validateDocument(content, name, sourceFile ?? path);
-  const current = existingBytes(path);
+  const current = existingBytes(path, root);
   if (current !== null && (!overwrite || expectedHash === undefined)) {
     throw new Error(`Skill conflict: ${path} already exists; overwrite:true and matching expectedHash are required.`);
   }
-  if (expectedHash !== undefined) checkIntegrity(path, expectedHash);
+  if (expectedHash !== undefined) checkIntegrity(path, expectedHash, root);
   if (current !== null) {
-    const backupStat = inspectPath(join(root, '.agent-skills-backups'));
+    const backupStat = inspectPath(join(root, '.agent-skills-backups'), root);
     if (backupStat && !backupStat.isDirectory()) throw new Error('Backup destination is not a directory.');
   }
   if (dryRun) return { path, hash, backup: null, dryRun: true };
 
   let backup = null;
   if (current !== null) {
-    const latest = checkIntegrity(path, expectedHash);
+    const latest = checkIntegrity(path, expectedHash, root);
     // The helper's timestamp has millisecond precision. A unique subfolder
     // prevents two fast updates from replacing an earlier durable backup.
     backup = backupExistingFile(root, join(randomUUID(), relativePath), latest);
-    checkIntegrity(path, expectedHash);
-  } else if (existingBytes(path) !== null) {
+    checkIntegrity(path, expectedHash, root);
+  } else if (existingBytes(path, root) !== null) {
     throw new Error(`Integrity error: destination appeared during creation: ${path}`);
   }
   writeFileSafely(root, relativePath, content);
-  if (sha256(readRegularFile(path)) !== hash) throw new Error(`Integrity error: written content hash differs: ${path}`);
+  if (sha256(readRegularFile(path, root)) !== hash) throw new Error(`Integrity error: written content hash differs: ${path}`);
   return { path, hash, backup, dryRun: false };
 }
 
@@ -222,7 +251,7 @@ export function validateProjectSkills(projectDir) {
   try {
     root = projectRoot(projectDir);
     skillsRoot = join(root, SKILLS_PATH);
-    const stat = inspectPath(skillsRoot);
+    const stat = inspectPath(skillsRoot, root);
     if (!stat) return [];
     if (!stat.isDirectory()) throw new Error(`Skills path is not a directory: ${skillsRoot}`);
   } catch (error) {
@@ -234,7 +263,7 @@ export function validateProjectSkills(projectDir) {
     let found = 0;
     let entries;
     try {
-      if (!inspectPath(directory)?.isDirectory()) throw new Error(`Skill directory is missing: ${directory}`);
+      if (!inspectPath(directory, root)?.isDirectory()) throw new Error(`Skill directory is missing: ${directory}`);
       entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
     } catch (error) {
       failure(directory, error);
@@ -243,10 +272,10 @@ export function validateProjectSkills(projectDir) {
     for (const entry of entries) {
       const path = join(directory, entry.name);
       try {
-        const stat = inspectPath(path);
+        const stat = inspectPath(path, root);
         if (entry.name === 'SKILL.md') {
           found += 1;
-          const metadata = validateDocument(readRegularFile(path), basename(dirname(path)), path);
+          const metadata = validateDocument(readRegularFile(path, root), basename(dirname(path)), path);
           records.push({ path, ok: true, errors: [], ...metadata });
         } else if (stat?.isDirectory()) {
           const before = records.length;
