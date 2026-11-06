@@ -145,6 +145,9 @@ flowchart TD
 | | `loop-test-tdd-cycle` | Test-driven development (Red-Green-Refactor) with verifiable test evidence |
 | **Quality** | `tester-qa-strategy` | Risk-based testing, regression diagnosis, and environment isolation |
 | | `loop-test-self-healing-test` | Repair test code safely without weakening assertion contracts |
+| **Enterprise / Prod** | `security-vulnerability-hardening` | OWASP Top 10 mitigation, auth/tenancy checks, and PII protection |
+| | `database-migration-safeguards` | Zero-downtime expand/contract schema evolution and table lock avoidance |
+| | `devops-observability-health` | Production readiness, liveness/readiness probes, and structured JSON logs |
 | **Delivery** | `cicd-pipeline-engineering` | GitHub Actions, Docker, CI/CD pipeline repair and deployment safety |
 | | `git-repository-workflow` | Staged diff reviews, secret detection, and safe checkpoint commits |
 | **Architecture** | `backend-nestjs-conventions` | NestJS modules, controllers, providers, and dependency injection |
@@ -294,6 +297,31 @@ flowchart TD
 2. **Independent Reviewer**: ผู้ตรวจทาน (Reviewer) จะต้องเป็นคนละตัวกับคนเขียนโค้ด (ห้ามผู้เขียนตรวจงานตัวเอง)
 3. **Evidence-Based Success**: ห้ามเคลมว่างานสำเร็จหากไม่มีหลักฐานการรัน Check / Tests มาแสดง
 4. **Strict Git Safety**: Workers ไม่ทำ commit, push หรือ publish เอง สิทธิ์การตัดสินใจขั้นสุดท้ายเป็นของผู้ใช้
+
+---
+
+### 📚 แคตตาล็อก Skills ในระบบ (Skills Catalog)
+
+| หมวดหมู่ | ชื่อ Skill | บทบาทและหน้าที่หลัก |
+| :--- | :--- | :--- |
+| **พื้นฐาน (Core)** | `core-no-assumptions` | สกัดกั้นการเดา, ใช้ Spec Template & AC, Protocol `[NEED_INFORMATION]` |
+| | `core-language-strategy` | สื่อสารภาษาไทยอย่างเป็นธรรมชาติ และคง command/identifier ภาษาอังกฤษ |
+| | `core-skill-authoring` | สร้าง ปรับปรุง และตรวจสอบความถูกต้องของ Skill ตามมาตรฐาน |
+| **พัฒนาโค้ด (Dev)** | `developer-implementation` | Architecture First, Surgical Reading, ป้องกัน Script พังด้วย Deterministic Tooling |
+| | `loop-test-tdd-cycle` | วงจร TDD (Red-Green-Refactor) พร้อมหลักฐานการรันเทสต์จริง |
+| **ความปลอดภัย & Prod** | `security-vulnerability-hardening` | ป้องกัน OWASP Top 10, ตรวจสอบ Authorization/Tenancy, คุ้มครอง PII และ Secrets |
+| | `database-migration-safeguards` | การย้าย Schema แบบ Zero-Downtime (Expand/Contract) ป้องกัน Table Lock |
+| | `devops-observability-health` | ตรวจสอบความพร้อม Liveness/Readiness, Graceful Shutdown และ Structured JSON Logs |
+| **คุณภาพ (QA)** | `tester-qa-strategy` | กฎเหล็ก Anti-Fake-Done, ทดสอบครอบคลุม Edge Cases, บังคับ Execution Evidence |
+| | `loop-test-self-healing-test` | ซ่อมแซมโค้ดเทสต์อย่างปลอดภัย ไม่ลดความเข้มงวดของ assertion |
+| **จัดส่ง (Delivery)** | `cicd-pipeline-engineering` | จัดการ GitHub Actions, Docker, ตรวจสอบ Pipeline และความปลอดภัยในการ Deploy |
+| | `git-repository-workflow` | ตรวจสอบ staged diff, สกัดกั้นการ commit secrets, ควบคุม checkpoint commits |
+| **สถาปัตยกรรม** | `backend-nestjs-conventions` | NestJS modules, controllers, providers และ DI conventions |
+| | `backend-mongodb-schema` | ออกแบบ MongoDB schema, indexing และ access patterns |
+| | `frontend-nextjs-app-router` | Next.js App Router, routing และ server/client boundaries |
+| | `frontend-tailwind` | ดีไซน์โทเคน, responsive layout และ accessible UI states |
+| **ทีมงาน (Team)** | `team-engineering-team` | ขั้นตอน Definition of Done และการประสานงานในทีมวิศวกร |
+| | `team-subagent-orchestration` | รูปแบบ Big Agent teaches Small Agent และการกระจายงานให้ Subagents |
 
 ---
 
