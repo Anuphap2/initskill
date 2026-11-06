@@ -1,8 +1,14 @@
 # Tester and QA Strategy
 
+## กฎเหล็กป้องกัน "ติ๊กว่าครบ ทั้งที่ไม่ครบ" (Anti-Fake-Done & Verification)
+
+- **ต้องมีหลักฐานเชิงประจักษ์ (Hard Execution Evidence)**: ห้ามเคลมว่างานเสร็จสิ้น หรือติ๊กถูกใน Checklist เพียงเพราะคิดว่าโค้ดน่าจะทำงานได้ ทุกการยืนยันต้องแนบผลลัพธ์คำสั่งจริง (command execution logs, exit code 0, test runner output) เสมอ
+- **การตรวจสอบอย่างเป็นอิสระ (Independent Verification)**: ผู้เขียนโค้ด (Developer) ห้ามเป็นผู้รับรองผลงานของตนเองเพียงลำพัง ในระบบ Multi-Agent ผู้ทำหน้าที่ QA/Reviewer จะต้องเป็นผู้ตรวจสอบผลการทดสอบจริงตาม Acceptance Criteria (AC) แบบข้อต่อข้อ
+- **ห้ามทำให้ Test อ่อนลง (No Softened Assertions)**: ห้ามลบ test assertion, ห้ามข้าม error check หรือปิด lint/typecheck เพื่อแกล้งให้ pipeline ผ่าน การแก้ไขต้องแก้ที่ root cause ของปัญหาเท่านั้น
+
 ## การออกแบบ test
 
-- แปลง acceptance criteria เป็น test cases ก่อนสรุปว่างานผ่าน
+- แปลง acceptance criteria แต่ละข้อเป็น test cases อย่างเคร่งครัดก่อนสรุปว่างานผ่าน
 - ครอบคลุม happy path, validation error, authorization, empty state, boundary และ failure ของ dependency
 - เลือกระดับ test ให้เหมาะสม: unit สำหรับ logic, integration สำหรับการเชื่อมต่อ และ end-to-end สำหรับ critical user flow
 
@@ -10,13 +16,12 @@
 
 - อ่าน error, stack trace, logs และผลลัพธ์จริงก่อนตั้งสมมติฐาน
 - แยก product defect, test defect, environment defect และ flaky test ให้ชัด
-- ห้ามลบหรือทำให้ test อ่อนลงเพียงเพื่อให้ pipeline ผ่าน
 - การแก้ self-healing จำกัดไม่เกิน 3 รอบ และต้องแก้เฉพาะไฟล์ test ตามกฎ self-healing ที่กำหนด
 
-## รายงานผล
+## รายงานผลพร้อมหลักฐาน (Evidence Reporting)
 
-- ระบุ command ที่รัน, จำนวนผ่าน/ไม่ผ่าน, failure ที่ reproduce ได้ และความเสี่ยงด้าน regression
-- ถ้ายังไม่ผ่าน ให้หยุดพร้อมหลักฐานและสิ่งที่ต้องการจาก Developer
+- แสดง command ที่รัน, terminal output จริง, จำนวนผ่าน/ไม่ผ่าน, failure ที่ reproduce ได้ และความเสี่ยงด้าน regression
+- หากการทดสอบยังไม่ผ่าน ให้หยุดทันทีพร้อมหลักฐาน stack trace และสิ่งที่ต้องการให้ Developer ปรับแก้
 
 ## Risk และ Technical Debt
 

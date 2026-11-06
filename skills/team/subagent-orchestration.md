@@ -2,6 +2,13 @@
 
 Use this workflow for independent implementation slices, bounded investigation, or a separate verification pass. Simple dependent work can remain in the coordinator.
 
+## Tiered Delegation Pattern (Big Agent -> Small Agent)
+
+- **Coordinator as Architect (Senior)**: ใช้โมเดลความสามารถสูงในการวิเคราะห์ภาพรวม, กำหนด Spec Template, วางขอบเขต (In-Scope / Out-of-Scope), เขียน Acceptance Criteria (AC) และเลือก Skill ที่เหมาะสม
+- **Worker as Implementer (Junior)**: มอบหมายงานที่ bounded ให้ worker รันตาม Spec และ Skill อย่างเคร่งครัด รวดเร็ว (Fast TPS / Low Effort) ไม่ขยาย scope หรือคาดเดาเอง
+- **Independent Reviewer (Auditor)**: แยก Reviewer/Tester ตรวจสอบหลักฐานการรันจริง (Hard Execution Evidence) เทียบกับ AC เสมอ
+- **Retrospective Loop**: เมื่อ Worker ทำงานผิดพลาด ให้อัปเดต Guideline/Skill หรือ Spec เพื่อให้การรันในอนาคตถูกต้องโดยอัตโนมัติ
+
 ## Dispatch contract
 
 - Read `.agents/project/subagent-contract.md` and inspect the native tools exposed by the current host before dispatching. Codex uses native spawn/message/wait/close tools and project custom agents; Antigravity uses `invoke_subagent` with `subagent: true` role definitions. Follow the live tool schema, not assumed parameters.
